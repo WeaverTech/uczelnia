@@ -16,6 +16,7 @@ from reportlab.pdfgen import canvas
 
 HTML_PATH = Path("/tmp/13M5.htm")
 OUT_PATH = Path("/workspace/plan-zajec-13M5.pdf")
+ICS_PATH = Path("/workspace/plan-zajec-13M5.ics")
 FONT_DIR = Path("/usr/share/fonts/truetype/macos")
 
 pdfmetrics.registerFont(TTFont("Inter", str(FONT_DIR / "Inter-Regular.ttf")))
@@ -586,6 +587,92 @@ def draw_week(c: canvas.Canvas, monday: date, events: list[dict], page: int, pag
         c.line(x, grid_bottom, x, grid_top)
 
 
+def ics_escape(text: str) -> str:
+    return (
+        text.replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+        .replace("\n", "\\n")
+    )
+
+
+def fold(line: str) -> str:
+    raw = line.encode("utf-8")
+    chunks = []
+    while len(raw) > 73:
+        cut = 73
+        while cut > 0 and (raw[cut] & 0xC0) == 0x80:
+            cut -= 1
+        chunks.append(raw[:cut].decode("utf-8"))
+        raw = raw[cut:]
+    chunks.append(raw.decode("utf-8"))
+    return "\r\n ".join(chunks)
+
+
+def write_ics(events: list[dict]) -> int:
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//13M5//plan zajec//PL",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "X-WR-CALNAME:Plan 13M5",
+        "X-WR-TIMEZONE:Europe/Warsaw",
+        "BEGIN:VTIMEZONE",
+        "TZID:Europe/Warsaw",
+        "X-LIC-LOCATION:Europe/Warsaw",
+        "BEGIN:DAYLIGHT",
+        "TZOFFSETFROM:+0100",
+        "TZOFFSETTO:+0200",
+        "TZNAME:CEST",
+        "DTSTART:19700329T020000",
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU",
+        "END:DAYLIGHT",
+        "BEGIN:STANDARD",
+        "TZOFFSETFROM:+0200",
+        "TZOFFSETTO:+0100",
+        "TZNAME:CET",
+        "DTSTART:19701025T030000",
+        "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU",
+        "END:STANDARD",
+        "END:VTIMEZONE",
+    ]
+    count = 0
+    for event in events:
+        for start, end in event["blocks"]:
+            stamp = f"{event['date'].strftime('%Y%m%d')}T{start // 60:02d}{start % 60:02d}00"
+            end_stamp = f"{event['date'].strftime('%Y%m%d')}T{end // 60:02d}{end % 60:02d}00"
+            uid = f"{event['date'].isoformat()}-{start}-{event['code']}-{event['kind']}@13m5"
+            summary = f"{event['full']} · {event['tag']}"
+            description = "\\n".join(
+                part
+                for part in (
+                    f"Prowadzący: {event['teacher']}" if event["teacher"] else "",
+                    f"Grupa: {event['group']}" if event["group"] else "",
+                    "Wykład — w planie PDF jest na biało." if event["kind"] == "wyk" else "",
+                )
+                if part
+            )
+            lines.extend(
+                [
+                    "BEGIN:VEVENT",
+                    f"UID:{uid}",
+                    "DTSTAMP:20260924T000000Z",
+                    f"DTSTART;TZID=Europe/Warsaw:{stamp}",
+                    f"DTEND;TZID=Europe/Warsaw:{end_stamp}",
+                    fold(f"SUMMARY:{ics_escape(summary)}"),
+                    fold(f"LOCATION:{ics_escape(event['room'])}"),
+                    fold(f"DESCRIPTION:{description}"),
+                    "TRANSP:TRANSPARENT" if event["kind"] == "wyk" else "TRANSP:OPAQUE",
+                    "END:VEVENT",
+                ]
+            )
+            count += 1
+    lines.append("END:VCALENDAR")
+    ICS_PATH.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+    return count
+
+
 def main() -> None:
     events = parse_events(HTML_PATH)
     mondays = week_mondays()
@@ -601,7 +688,9 @@ def main() -> None:
 
     attended = [e for e in events if e["kind"] != "wyk"]
     lectures = [e for e in events if e["kind"] == "wyk"]
+    ics_count = write_ics(events)
     print(f"wrote {OUT_PATH}  pages={pages}  attended_blocks={len(attended)}  lectures={len(lectures)}")
+    print(f"wrote {ICS_PATH}  events={ics_count}")
     counts = defaultdict(int)
     for e in events:
         counts[(e["kind"], e["code"])] += len(e["blocks"])
