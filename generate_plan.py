@@ -740,8 +740,10 @@ def write_work_ics(events: list[dict]) -> int:
                 f"DTSTART;TZID=Europe/Warsaw:{stamp}",
                 f"DTEND;TZID=Europe/Warsaw:{end_stamp}",
                 "SUMMARY:Uczelnia",
+                "STATUS:CONFIRMED",
                 "TRANSP:OPAQUE",
-                "X-MICROSOFT-CDO-BUSYSTATUS:BUSY",
+                "X-MICROSOFT-CDO-BUSYSTATUS:OOF",
+                "X-MICROSOFT-CDO-INTENDEDSTATUS:OOF",
                 "END:VEVENT",
             ]
         )
