@@ -17,6 +17,7 @@ from reportlab.pdfgen import canvas
 HTML_PATH = Path("/tmp/13M5.htm")
 OUT_PATH = Path("/workspace/plan-zajec-13M5.pdf")
 ICS_PATH = Path("/workspace/plan-zajec-13M5.ics")
+WORK_ICS_PATH = Path("/workspace/plan-uczelnia-praca.ics")
 FONT_DIR = Path("/usr/share/fonts/truetype/macos")
 
 pdfmetrics.registerFont(TTFont("Inter", str(FONT_DIR / "Inter-Regular.ttf")))
@@ -673,6 +674,82 @@ def write_ics(events: list[dict]) -> int:
     return count
 
 
+def work_blocks(events: list[dict]) -> list[tuple[date, int, int]]:
+    """One 'Uczelnia' block per stay. Lectures are skipped.
+
+    Classes separated by at most two hours stay in the same block, so a day
+    that starts at 12:45 and ends at 17:45 is a single event. A longer hole,
+    such as the morning and the 17:00 project on 1 February, stays two blocks.
+    """
+    spans: dict[date, list[tuple[int, int]]] = defaultdict(list)
+    for event in events:
+        if event["kind"] == "wyk":
+            continue
+        spans[event["date"]].extend(event["blocks"])
+    blocks = []
+    for day, pieces in spans.items():
+        pieces.sort()
+        start, end = pieces[0]
+        for nxt, nxt_end in pieces[1:]:
+            if nxt - end <= 120:
+                end = max(end, nxt_end)
+            else:
+                blocks.append((day, start, end))
+                start, end = nxt, nxt_end
+        blocks.append((day, start, end))
+    return blocks
+
+
+def write_work_ics(events: list[dict]) -> int:
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//13M5//uczelnia praca//PL",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "X-WR-CALNAME:Uczelnia",
+        "X-WR-TIMEZONE:Europe/Warsaw",
+        "BEGIN:VTIMEZONE",
+        "TZID:Europe/Warsaw",
+        "X-LIC-LOCATION:Europe/Warsaw",
+        "BEGIN:DAYLIGHT",
+        "TZOFFSETFROM:+0100",
+        "TZOFFSETTO:+0200",
+        "TZNAME:CEST",
+        "DTSTART:19700329T020000",
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU",
+        "END:DAYLIGHT",
+        "BEGIN:STANDARD",
+        "TZOFFSETFROM:+0200",
+        "TZOFFSETTO:+0100",
+        "TZNAME:CET",
+        "DTSTART:19701025T030000",
+        "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU",
+        "END:STANDARD",
+        "END:VTIMEZONE",
+    ]
+    count = 0
+    for day, start, end in sorted(work_blocks(events)):
+        stamp = f"{day.strftime('%Y%m%d')}T{start // 60:02d}{start % 60:02d}00"
+        end_stamp = f"{day.strftime('%Y%m%d')}T{end // 60:02d}{end % 60:02d}00"
+        lines.extend(
+            [
+                "BEGIN:VEVENT",
+                f"UID:uczelnia-{day.isoformat()}-{start}@13m5",
+                "DTSTAMP:20260924T000000Z",
+                f"DTSTART;TZID=Europe/Warsaw:{stamp}",
+                f"DTEND;TZID=Europe/Warsaw:{end_stamp}",
+                "SUMMARY:Uczelnia",
+                "TRANSP:OPAQUE",
+                "END:VEVENT",
+            ]
+        )
+        count += 1
+    lines.append("END:VCALENDAR")
+    WORK_ICS_PATH.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+    return count
+
+
 def main() -> None:
     events = parse_events(HTML_PATH)
     mondays = week_mondays()
@@ -689,8 +766,10 @@ def main() -> None:
     attended = [e for e in events if e["kind"] != "wyk"]
     lectures = [e for e in events if e["kind"] == "wyk"]
     ics_count = write_ics(events)
+    work_count = write_work_ics(events)
     print(f"wrote {OUT_PATH}  pages={pages}  attended_blocks={len(attended)}  lectures={len(lectures)}")
     print(f"wrote {ICS_PATH}  events={ics_count}")
+    print(f"wrote {WORK_ICS_PATH}  blocks={work_count}")
     counts = defaultdict(int)
     for e in events:
         counts[(e["kind"], e["code"])] += len(e["blocks"])
