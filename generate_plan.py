@@ -706,7 +706,6 @@ def write_work_ics(events: list[dict]) -> int:
         "VERSION:2.0",
         "PRODID:-//13M5//uczelnia praca//PL",
         "CALSCALE:GREGORIAN",
-        "METHOD:PUBLISH",
         "X-WR-CALNAME:Uczelnia",
         "X-WR-TIMEZONE:Europe/Warsaw",
         "BEGIN:VTIMEZONE",
@@ -741,6 +740,7 @@ def write_work_ics(events: list[dict]) -> int:
                 f"DTEND;TZID=Europe/Warsaw:{end_stamp}",
                 "SUMMARY:Uczelnia",
                 "TRANSP:OPAQUE",
+                "X-MICROSOFT-CDO-BUSYSTATUS:BUSY",
                 "END:VEVENT",
             ]
         )
