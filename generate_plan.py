@@ -616,7 +616,6 @@ def write_ics(events: list[dict]) -> int:
         "VERSION:2.0",
         "PRODID:-//13M5//plan zajec//PL",
         "CALSCALE:GREGORIAN",
-        "METHOD:PUBLISH",
         "X-WR-CALNAME:Plan 13M5",
         "X-WR-TIMEZONE:Europe/Warsaw",
         "BEGIN:VTIMEZONE",
