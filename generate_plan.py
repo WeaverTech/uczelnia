@@ -640,6 +640,8 @@ def write_ics(events: list[dict]) -> int:
     ]
     count = 0
     for event in events:
+        if event["kind"] == "wyk":
+            continue
         for start, end in event["blocks"]:
             stamp = f"{event['date'].strftime('%Y%m%d')}T{start // 60:02d}{start % 60:02d}00"
             end_stamp = f"{event['date'].strftime('%Y%m%d')}T{end // 60:02d}{end % 60:02d}00"
@@ -650,7 +652,7 @@ def write_ics(events: list[dict]) -> int:
                 for part in (
                     f"Prowadzący: {event['teacher']}" if event["teacher"] else "",
                     f"Grupa: {event['group']}" if event["group"] else "",
-                    "Wykład — w planie PDF jest na biało." if event["kind"] == "wyk" else "",
+                    "",
                 )
                 if part
             )
@@ -664,7 +666,7 @@ def write_ics(events: list[dict]) -> int:
                     fold(f"SUMMARY:{ics_escape(summary)}"),
                     fold(f"LOCATION:{ics_escape(event['room'])}"),
                     fold(f"DESCRIPTION:{description}"),
-                    "TRANSP:TRANSPARENT" if event["kind"] == "wyk" else "TRANSP:OPAQUE",
+                    "TRANSP:OPAQUE",
                     "END:VEVENT",
                 ]
             )
