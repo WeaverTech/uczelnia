@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kalendarz zajęć 13M5: GL04, projekt gP03, angielski Majka-Pauli, SL02 albo SL03."""
+"""Kalendarz zajęć 13M5: GL04, projekt gP03, angielski Majka-Pauli, specjalność SL03."""
 
 from __future__ import annotations
 
@@ -27,13 +27,14 @@ PAGE_W, PAGE_H = A4  # portrait
 
 MONTHS = {"X": 10, "XI": 11, "XII": 12, "I": 1, "II": 2}
 MONTH_NAME = {
+    9: "września",
     10: "października",
     11: "listopada",
     12: "grudnia",
     1: "stycznia",
     2: "lutego",
 }
-MONTH_SHORT = {10: "paź", 11: "lis", 12: "gru", 1: "sty", 2: "lut"}
+MONTH_SHORT = {9: "wrz", 10: "paź", 11: "lis", 12: "gru", 1: "sty", 2: "lut"}
 DAY_NAME = {
     0: "poniedziałek",
     1: "wtorek",
@@ -114,10 +115,10 @@ def role_of(code: str, group: str, teacher: str) -> str | None:
         return "lab"
     if "GK/P03" in g:
         return "proj"
-    if "SL02" in g:
-        return "spec02"
     if "SL03" in g:
         return "spec03"
+    if "SL02" in g:
+        return None
     if any(x in g for x in ("GL02", "GL03", "GK/P02", "SL01", "SP01", "SP02")):
         return None
     if g.startswith("12") or "12A" in g or "12B" in g:
@@ -263,10 +264,8 @@ def parse_events(html_path: Path) -> list[dict]:
                     if not blocks:
                         continue
                     short, full = SUBJECTS[code]
-                    if kind == "spec02":
-                        tag = "SL02?"
-                    elif kind == "spec03":
-                        tag = "SL03?"
+                    if kind == "spec03":
+                        tag = "SL03"
                     elif kind == "proj":
                         tag = "projekt"
                     elif kind == "ang":
@@ -294,7 +293,8 @@ def parse_events(html_path: Path) -> list[dict]:
 
 
 def week_mondays() -> list[date]:
-    start = date(2026, 10, 5)
+    # 1 października (czwartek) ma wykład, więc pierwszy tydzień zaczyna się 28 września.
+    start = date(2026, 9, 28)
     end = date(2027, 2, 1)
     days = []
     cur = start
@@ -339,7 +339,7 @@ def draw_header(c: canvas.Canvas, monday: date, page: int, pages: int) -> None:
 
     c.setFillColor(hex_color("#374151"))
     c.setFont("Inter", 7.2)
-    note = "GL04   ·   projekt gP03   ·   angielski Majka-Pauli   ·   specjalność SL02 albo SL03"
+    note = "GL04   ·   projekt gP03   ·   angielski Majka-Pauli   ·   specjalność SL03"
     c.drawString(16, PAGE_H - 34, note)
 
     if monday.month != friday.month:
@@ -371,8 +371,7 @@ def draw_legend(c: canvas.Canvas) -> None:
         ("#0369A1", "#E0F2FE", "Miernictwo lab"),
         ("#3F6212", "#ECFCCB", "Eksploatacyjne lab"),
         ("#166534", "#DCFCE7", "Angielski"),
-        ("#7E22CE", "#F3E8FF", "KWBE SL02?"),
-        ("#9D174D", "#FCE7F3", "KWBE SL03?"),
+        ("#9D174D", "#FCE7F3", "KWBE SL03"),
         ("#D1D5DB", "#FFFFFF", "wykład"),
     ]
     y = 36
@@ -393,7 +392,7 @@ def draw_legend(c: canvas.Canvas) -> None:
         x += width + 8
     footer = (
         "Wykłady są białe, bo nie wchodzą w plan chodzenia. "
-        "SL02 (piątki rano) i SL03 (wtorki 11:00) to dwie możliwe grupy specjalności — chodzisz tylko na jedną. "
+        "Specjalność KWBE to grupa SL03, wtorki 11:00, sala B206. "
         "Wykład z robotyki jest w e-learningu. Źródło: podzial.mech.pk.edu.pl, plan 13M5, aktualizacja 23.09.2026."
     )
     c.setFillColor(hex_color("#6B7280"))
