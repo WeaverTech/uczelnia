@@ -15,7 +15,8 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 HTML_PATH = Path("/tmp/13M5.htm")
-OUT_PATH = Path("/workspace/plan-zajec-13M5.pdf")
+PDF_WITH = Path("/workspace/plan-13M5-z-wykladami.pdf")
+PDF_WITHOUT = Path("/workspace/plan-13M5-bez-wykladow.pdf")
 ICS_PATH = Path("/workspace/plan-zajec-13M5.ics")
 WORK_ICS_PATH = Path("/workspace/plan-uczelnia-praca.ics")
 FONT_DIR = Path("/usr/share/fonts/truetype/macos")
@@ -105,7 +106,7 @@ STYLES = {
     "ang": ("#166534", "#DCFCE7", "#14532D"),
     "spec02": ("#7E22CE", "#F3E8FF", "#581C87"),
     "spec03": ("#9D174D", "#FCE7F3", "#831843"),
-    "wyk": ("#E5E7EB", "#FFFFFF", "#6B7280"),
+    "wyk": ("#6B7280", "#F3F4F6", "#374151"),
 }
 
 
@@ -247,12 +248,15 @@ def parse_events(html_path: Path) -> list[dict]:
                     if lines[0][:1].isdigit():
                         continue
                     code = lines[0]
-                    if len(lines) == 3 and any(ch.isdigit() for ch in lines[1]):
-                        teacher, group, room = "", lines[1], lines[2]
+                    rest = lines[1:]
+                    if rest and rest[0] in {"L", "W", "C", "P", "S"}:
+                        rest = rest[1:]
+                    if len(rest) == 2 and any(ch.isdigit() for ch in rest[0]):
+                        teacher, group, room = "", rest[0], rest[1]
                     else:
-                        teacher = lines[1] if len(lines) > 1 else ""
-                        group = lines[2] if len(lines) > 2 else ""
-                        room = " ".join(lines[3:]) if len(lines) > 3 else ""
+                        teacher = rest[0] if rest else ""
+                        group = rest[1] if len(rest) > 1 else ""
+                        room = " ".join(rest[2:]) if len(rest) > 2 else ""
                     kind = role_of(code, group, teacher)
                     if kind is None or code not in SUBJECTS:
                         continue
@@ -326,11 +330,11 @@ def hex_color(value: str) -> tuple[float, float, float]:
     return tuple(int(value[i : i + 2], 16) / 255 for i in (0, 2, 4))
 
 
-def draw_header(c: canvas.Canvas, monday: date, page: int, pages: int) -> None:
+def draw_header(c: canvas.Canvas, monday: date, page: int, pages: int, label: str) -> None:
     friday = monday + timedelta(days=4)
     c.setFillColor(hex_color("#111827"))
     c.setFont("Inter-Bold", 12.5)
-    c.drawString(16, PAGE_H - 20, "Plan zajęć  ·  13M5")
+    c.drawString(16, PAGE_H - 20, f"Plan zajęć  ·  {label}")
     c.setFont("Inter", 8)
     c.setFillColor(hex_color("#6B7280"))
     c.drawString(138, PAGE_H - 18.5, "semestr zimowy 2026/27")
@@ -360,7 +364,7 @@ def draw_header(c: canvas.Canvas, monday: date, page: int, pages: int) -> None:
     c.drawRightString(PAGE_W - 22 - pill_w, PAGE_H - 36.2, title)
 
 
-def draw_legend(c: canvas.Canvas) -> None:
+def draw_legend(c: canvas.Canvas, include_lectures: bool) -> None:
     items = [
         ("#1D4ED8", "#DBEAFE", "MES lab"),
         ("#0F766E", "#CCFBF1", "Robotyka lab"),
@@ -374,8 +378,9 @@ def draw_legend(c: canvas.Canvas) -> None:
         ("#3F6212", "#ECFCCB", "Eksploatacyjne lab"),
         ("#166534", "#DCFCE7", "Angielski"),
         ("#9D174D", "#FCE7F3", "KWBE SL03"),
-        ("#D1D5DB", "#FFFFFF", "wykład"),
     ]
+    if include_lectures:
+        items.append(("#6B7280", "#F3F4F6", "wykład"))
     y = 36
     x = 16
     max_x = PAGE_W - 16
@@ -393,8 +398,8 @@ def draw_legend(c: canvas.Canvas) -> None:
         c.drawString(x + 11, y + 1.3, label)
         x += width + 8
     footer = (
-        "Wykłady są białe, bo nie wchodzą w plan chodzenia. "
-        "Specjalność KWBE to grupa SL03, wtorki 11:00, sala B206. "
+        ("Wykłady są szare. " if include_lectures else "Ten plik nie zawiera wykładów. ")
+        + "Specjalność KWBE to grupa SL03, wtorki 11:00, sala B206. "
         "Wykład z robotyki jest w e-learningu. Źródło: podzial.mech.pk.edu.pl, plan 13M5, aktualizacja 23.09.2026."
     )
     c.setFillColor(hex_color("#6B7280"))
@@ -503,11 +508,11 @@ def assign_columns(items: list[dict]) -> None:
             items[i]["cols"] = cols
 
 
-def draw_week(c: canvas.Canvas, monday: date, events: list[dict], page: int, pages: int) -> None:
+def draw_week(c: canvas.Canvas, monday: date, events: list[dict], page: int, pages: int, label: str, include_lectures: bool) -> None:
     c.setFillColor(hex_color("#FFFFFF"))
     c.rect(0, 0, PAGE_W, PAGE_H, stroke=0, fill=1)
-    draw_header(c, monday, page, pages)
-    draw_legend(c)
+    draw_header(c, monday, page, pages, label)
+    draw_legend(c, include_lectures)
 
     grid_left = 44
     grid_right = PAGE_W - 12
@@ -518,6 +523,8 @@ def draw_week(c: canvas.Canvas, monday: date, events: list[dict], page: int, pag
 
     by_day: dict[date, list[dict]] = defaultdict(list)
     for event in events:
+        if not include_lectures and event["kind"] == "wyk":
+            continue
         if monday <= event["date"] <= monday + timedelta(days=4):
             for start, end in event["blocks"]:
                 by_day[event["date"]].append({**event, "start": start, "end": end})
@@ -753,24 +760,30 @@ def write_work_ics(events: list[dict]) -> int:
     return count
 
 
-def main() -> None:
-    events = parse_events(HTML_PATH)
+def write_pdf(path: Path, events: list[dict], title: str, label: str, include_lectures: bool) -> None:
     mondays = week_mondays()
     pages = len(mondays)
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    c = canvas.Canvas(str(OUT_PATH), pagesize=A4)
-    c.setTitle("Plan zajęć 13M5 — GL04, gP03")
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.setTitle(title)
     c.setAuthor("plan z podzial.mech.pk.edu.pl")
     for index, monday in enumerate(mondays, start=1):
-        draw_week(c, monday, events, index, pages)
+        draw_week(c, monday, events, index, pages, label, include_lectures)
         c.showPage()
     c.save()
+    print(f"wrote {path}")
+
+
+def main() -> None:
+    events = parse_events(HTML_PATH)
+    PDF_WITH.parent.mkdir(parents=True, exist_ok=True)
+    write_pdf(PDF_WITH, events, "Plan zajęć 13M5 — z wykładami", "z wykładami", True)
+    write_pdf(PDF_WITHOUT, events, "Plan zajęć 13M5 — bez wykładów", "bez wykładów", False)
 
     attended = [e for e in events if e["kind"] != "wyk"]
     lectures = [e for e in events if e["kind"] == "wyk"]
     ics_count = write_ics(events)
     work_count = write_work_ics(events)
-    print(f"wrote {OUT_PATH}  pages={pages}  attended_blocks={len(attended)}  lectures={len(lectures)}")
+    print(f"attended_blocks={len(attended)}  lectures={len(lectures)}")
     print(f"wrote {ICS_PATH}  events={ics_count}")
     print(f"wrote {WORK_ICS_PATH}  blocks={work_count}")
     counts = defaultdict(int)
