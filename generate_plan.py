@@ -330,7 +330,7 @@ def hex_color(value: str) -> tuple[float, float, float]:
     return tuple(int(value[i : i + 2], 16) / 255 for i in (0, 2, 4))
 
 
-def draw_header(c: canvas.Canvas, monday: date, page: int, pages: int, label: str) -> None:
+def draw_header(c: canvas.Canvas, monday: date, page: int, pages: int, label: str, groups_note: str | None = None) -> None:
     friday = monday + timedelta(days=4)
     c.setFillColor(hex_color("#111827"))
     c.setFont("Inter-Bold", 12.5)
@@ -345,7 +345,7 @@ def draw_header(c: canvas.Canvas, monday: date, page: int, pages: int, label: st
 
     c.setFillColor(hex_color("#374151"))
     c.setFont("Inter", 7.2)
-    note = "GL04   ·   projekt gP03   ·   angielski Majka-Pauli   ·   specjalność SL03"
+    note = groups_note or "GL04   ·   projekt gP03   ·   angielski Majka-Pauli   ·   specjalność SL03"
     c.drawString(16, PAGE_H - 34, note)
 
     if monday.month != friday.month:
@@ -364,7 +364,7 @@ def draw_header(c: canvas.Canvas, monday: date, page: int, pages: int, label: st
     c.drawRightString(PAGE_W - 22 - pill_w, PAGE_H - 36.2, title)
 
 
-def draw_legend(c: canvas.Canvas, include_lectures: bool) -> None:
+def draw_legend(c: canvas.Canvas, include_lectures: bool, footer_note: str | None = None, show_sl03: bool = True) -> None:
     items = [
         ("#1D4ED8", "#DBEAFE", "MES lab"),
         ("#0F766E", "#CCFBF1", "Robotyka lab"),
@@ -377,8 +377,9 @@ def draw_legend(c: canvas.Canvas, include_lectures: bool) -> None:
         ("#0369A1", "#E0F2FE", "Miernictwo lab"),
         ("#3F6212", "#ECFCCB", "Eksploatacyjne lab"),
         ("#166534", "#DCFCE7", "Angielski"),
-        ("#9D174D", "#FCE7F3", "KWBE SL03"),
     ]
+    if show_sl03:
+        items.append(("#9D174D", "#FCE7F3", "KWBE SL03"))
     if include_lectures:
         items.append(("#6B7280", "#F3F4F6", "wykład"))
     y = 36
@@ -399,8 +400,7 @@ def draw_legend(c: canvas.Canvas, include_lectures: bool) -> None:
         x += width + 8
     footer = (
         ("Wykłady są szare. " if include_lectures else "Ten plik nie zawiera wykładów. ")
-        + "Specjalność KWBE to grupa SL03, wtorki 11:00, sala B206. "
-        "Wykład z robotyki jest w e-learningu. Źródło: podzial.mech.pk.edu.pl, plan 13M5, aktualizacja 23.09.2026."
+        + (footer_note or "Specjalność KWBE to grupa SL03, wtorki 11:00, sala B206. Wykład z robotyki jest w e-learningu. Źródło: podzial.mech.pk.edu.pl, plan 13M5, aktualizacja 23.09.2026.")
     )
     c.setFillColor(hex_color("#6B7280"))
     c.setFont("Inter", 6.2)
@@ -508,11 +508,11 @@ def assign_columns(items: list[dict]) -> None:
             items[i]["cols"] = cols
 
 
-def draw_week(c: canvas.Canvas, monday: date, events: list[dict], page: int, pages: int, label: str, include_lectures: bool) -> None:
+def draw_week(c: canvas.Canvas, monday: date, events: list[dict], page: int, pages: int, label: str, include_lectures: bool, footer_note: str | None = None, groups_note: str | None = None, show_sl03: bool = True) -> None:
     c.setFillColor(hex_color("#FFFFFF"))
     c.rect(0, 0, PAGE_W, PAGE_H, stroke=0, fill=1)
-    draw_header(c, monday, page, pages, label)
-    draw_legend(c, include_lectures)
+    draw_header(c, monday, page, pages, label, groups_note)
+    draw_legend(c, include_lectures, footer_note, show_sl03)
 
     grid_left = 44
     grid_right = PAGE_W - 12
@@ -760,14 +760,14 @@ def write_work_ics(events: list[dict]) -> int:
     return count
 
 
-def write_pdf(path: Path, events: list[dict], title: str, label: str, include_lectures: bool) -> None:
+def write_pdf(path: Path, events: list[dict], title: str, label: str, include_lectures: bool, footer_note: str | None = None, groups_note: str | None = None, show_sl03: bool = True) -> None:
     mondays = week_mondays()
     pages = len(mondays)
     c = canvas.Canvas(str(path), pagesize=A4)
     c.setTitle(title)
     c.setAuthor("plan z podzial.mech.pk.edu.pl")
     for index, monday in enumerate(mondays, start=1):
-        draw_week(c, monday, events, index, pages, label, include_lectures)
+        draw_week(c, monday, events, index, pages, label, include_lectures, footer_note, groups_note, show_sl03)
         c.showPage()
     c.save()
     print(f"wrote {path}")
