@@ -19,6 +19,13 @@ PDF_WITH = Path("/workspace/plan-13M5-z-wykladami.pdf")
 PDF_WITHOUT = Path("/workspace/plan-13M5-bez-wykladow.pdf")
 ICS_PATH = Path("/workspace/plan-zajec-13M5.ics")
 WORK_ICS_PATH = Path("/workspace/plan-uczelnia-praca.ics")
+OFFICE_ICS_PATH = Path("/workspace/plan-praca-biuro.ics")
+OFFICE_FROM = date(2026, 10, 1)
+OFFICE_UNTIL = date(2027, 2, 5)
+OFFICE_OPEN = 8 * 60
+OFFICE_CLOSE = 17 * 60
+OFFICE_COMMUTE = 30
+OFFICE_MIN = 4 * 60
 FONT_DIR = Path("/usr/share/fonts/truetype/macos")
 
 pdfmetrics.registerFont(TTFont("Inter", str(FONT_DIR / "Inter-Regular.ttf")))
@@ -760,6 +767,135 @@ def write_work_ics(events: list[dict]) -> int:
     return count
 
 
+def attended_spans(events: list[dict]) -> dict[date, list[tuple[int, int]]]:
+    spans: dict[date, list[tuple[int, int]]] = defaultdict(list)
+    for event in events:
+        if event["kind"] == "wyk":
+            continue
+        spans[event["date"]].extend(event["blocks"])
+    return spans
+
+
+def attended_spans_from_ics(path: Path) -> dict[date, list[tuple[int, int]]]:
+    """Read the private class calendar. Lectures are already absent from that file."""
+    spans: dict[date, list[tuple[int, int]]] = defaultdict(list)
+    text = path.read_text(encoding="utf-8")
+    for chunk in text.split("BEGIN:VEVENT")[1:]:
+        start = end = ""
+        for line in chunk.splitlines():
+            if line.startswith("DTSTART"):
+                start = line.split(":", 1)[1]
+            elif line.startswith("DTEND"):
+                end = line.split(":", 1)[1]
+        if len(start) < 13 or len(end) < 13:
+            continue
+        day = date(int(start[0:4]), int(start[4:6]), int(start[6:8]))
+        start_min = int(start[9:11]) * 60 + int(start[11:13])
+        end_min = int(end[9:11]) * 60 + int(end[11:13])
+        spans[day].append((start_min, end_min))
+    return spans
+
+
+def _merge_spans(pieces: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(pieces):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def office_windows(
+    spans: dict[date, list[tuple[int, int]]],
+    first: date = OFFICE_FROM,
+    last: date = OFFICE_UNTIL,
+) -> list[tuple[date, int, int]]:
+    """Office stays of at least four hours between 8:00 and 17:00.
+
+    Thirty minutes each way is reserved only for a trip between the office and
+    a class. A weekday with no classes is a full office day. Weekends and
+    holidays are skipped.
+    """
+    windows: list[tuple[date, int, int]] = []
+    day = first
+    while day <= last:
+        if day.weekday() < 5 and day not in HOLIDAYS:
+            blocks = _merge_spans(spans.get(day, []))
+            if not blocks:
+                windows.append((day, OFFICE_OPEN, OFFICE_CLOSE))
+            else:
+                leave = blocks[0][0] - OFFICE_COMMUTE
+                if leave > OFFICE_OPEN and min(leave, OFFICE_CLOSE) - OFFICE_OPEN >= OFFICE_MIN:
+                    windows.append((day, OFFICE_OPEN, min(leave, OFFICE_CLOSE)))
+                for earlier, later in zip(blocks, blocks[1:]):
+                    arrive = max(earlier[1] + OFFICE_COMMUTE, OFFICE_OPEN)
+                    depart = min(later[0] - OFFICE_COMMUTE, OFFICE_CLOSE)
+                    if depart - arrive >= OFFICE_MIN:
+                        windows.append((day, arrive, depart))
+                arrive = max(blocks[-1][1] + OFFICE_COMMUTE, OFFICE_OPEN)
+                if OFFICE_CLOSE - arrive >= OFFICE_MIN:
+                    windows.append((day, arrive, OFFICE_CLOSE))
+        day += timedelta(days=1)
+    return windows
+
+
+def write_office_ics(
+    spans: dict[date, list[tuple[int, int]]],
+    path: Path = OFFICE_ICS_PATH,
+    first: date = OFFICE_FROM,
+    last: date = OFFICE_UNTIL,
+) -> int:
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//13M5//praca biuro//PL",
+        "CALSCALE:GREGORIAN",
+        "X-WR-CALNAME:Praca",
+        "X-WR-TIMEZONE:Europe/Warsaw",
+        "BEGIN:VTIMEZONE",
+        "TZID:Europe/Warsaw",
+        "X-LIC-LOCATION:Europe/Warsaw",
+        "BEGIN:DAYLIGHT",
+        "TZOFFSETFROM:+0100",
+        "TZOFFSETTO:+0200",
+        "TZNAME:CEST",
+        "DTSTART:19700329T020000",
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU",
+        "END:DAYLIGHT",
+        "BEGIN:STANDARD",
+        "TZOFFSETFROM:+0200",
+        "TZOFFSETTO:+0100",
+        "TZNAME:CET",
+        "DTSTART:19701025T030000",
+        "RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU",
+        "END:STANDARD",
+        "END:VTIMEZONE",
+    ]
+    count = 0
+    for day, start, end in office_windows(spans, first, last):
+        stamp = f"{day.strftime('%Y%m%d')}T{start // 60:02d}{start % 60:02d}00"
+        end_stamp = f"{day.strftime('%Y%m%d')}T{end // 60:02d}{end % 60:02d}00"
+        lines.extend(
+            [
+                "BEGIN:VEVENT",
+                f"UID:praca-{day.isoformat()}-{start}@13m5",
+                "DTSTAMP:20260930T000000Z",
+                f"DTSTART;TZID=Europe/Warsaw:{stamp}",
+                f"DTEND;TZID=Europe/Warsaw:{end_stamp}",
+                "SUMMARY:Praca",
+                "LOCATION:Biuro",
+                "STATUS:CONFIRMED",
+                "TRANSP:OPAQUE",
+                "END:VEVENT",
+            ]
+        )
+        count += 1
+    lines.append("END:VCALENDAR")
+    path.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+    return count
+
+
 def write_pdf(path: Path, events: list[dict], title: str, label: str, include_lectures: bool, footer_note: str | None = None, groups_note: str | None = None, show_sl03: bool = True) -> None:
     mondays = week_mondays()
     pages = len(mondays)
@@ -783,9 +919,11 @@ def main() -> None:
     lectures = [e for e in events if e["kind"] == "wyk"]
     ics_count = write_ics(events)
     work_count = write_work_ics(events)
+    office_count = write_office_ics(attended_spans(events))
     print(f"attended_blocks={len(attended)}  lectures={len(lectures)}")
     print(f"wrote {ICS_PATH}  events={ics_count}")
     print(f"wrote {WORK_ICS_PATH}  blocks={work_count}")
+    print(f"wrote {OFFICE_ICS_PATH}  blocks={office_count}")
     counts = defaultdict(int)
     for e in events:
         counts[(e["kind"], e["code"])] += len(e["blocks"])
