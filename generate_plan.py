@@ -174,6 +174,31 @@ def teacher_surname(raw: str) -> str:
     return "-".join(part.capitalize() for part in surname.split("-"))
 
 
+def looks_like_group(token: str) -> bool:
+    upper = token.upper()
+    return any(mark in upper for mark in ("GL0", "GK/", "SL0", "SP0", "13M", "13L", "13B", "12A", "12B"))
+
+
+def looks_like_room(token: str) -> bool:
+    head = token.split()[0] if token.split() else ""
+    return any(ch.isdigit() for ch in head) and any(ch.isalpha() for ch in head)
+
+
+def split_class_fields(rest: list[str]) -> tuple[str, str, str]:
+    """Plansoft puts the room before the group. Older grids used the opposite order."""
+    teacher_bits: list[str] = []
+    group = ""
+    room = ""
+    for token in rest:
+        if not group and looks_like_group(token):
+            group = token
+        elif not room and looks_like_room(token):
+            room = token
+        else:
+            teacher_bits.append(token)
+    return " ".join(teacher_bits), group, room
+
+
 def parse_events(html_path: Path) -> list[dict]:
     html = html_path.read_text(encoding="utf-8")
     html = html.replace("<td_removed>", "").replace("</td_removed>", "")
@@ -258,12 +283,7 @@ def parse_events(html_path: Path) -> list[dict]:
                     rest = lines[1:]
                     if rest and rest[0] in {"L", "W", "C", "P", "S"}:
                         rest = rest[1:]
-                    if len(rest) == 2 and any(ch.isdigit() for ch in rest[0]):
-                        teacher, group, room = "", rest[0], rest[1]
-                    else:
-                        teacher = rest[0] if rest else ""
-                        group = rest[1] if len(rest) > 1 else ""
-                        room = " ".join(rest[2:]) if len(rest) > 2 else ""
+                    teacher, group, room = split_class_fields(rest)
                     kind = role_of(code, group, teacher)
                     if kind is None or code not in SUBJECTS:
                         continue
