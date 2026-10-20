@@ -16,7 +16,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.ticker import FuncFormatter, MultipleLocator  # noqa: E402
+from matplotlib.ticker import FuncFormatter  # noqa: E402
 from docx import Document  # noqa: E402
 from docx.oxml import parse_xml  # noqa: E402
 from docx.oxml.ns import qn  # noqa: E402
@@ -31,12 +31,18 @@ OUT_DOCX = HERE / "Sprawozdanie_L1_silnik_asynchroniczny.docx"
 
 HEADER_TITLE = "Badanie właściwości silnika asynchronicznego"
 
-# Charakterystyka mechaniczna M = f(n) – dwa zestawy pomiarów (10 punktów każdy)
-# zanotowane ręcznie na stanowisku. Pozostawienie pustej listy pomija tę część
-# sprawozdania, a uzupełnienie danych dodaje ją automatycznie.
-# Format: {"f1": częstotliwość zasilania [Hz], "pomiary": [(M [N·m], n [obr/min]), ...]}
-CHARAKTERYSTYKA_MECHANICZNA: list[dict] = []
-P_BADANY = 2
+TESTED_MOTOR = {
+    "f1": 50,
+    "p": 2,
+    "n_N": 1350,
+}
+
+# Parametry krytyczne odczytane z charakterystyk mechanicznych M = f(s),
+# U – napięcie zasilania w % napięcia znamionowego.
+PARAMETRY_KRYTYCZNE = [
+    {"U": 70, "M_k": 0.71, "s_k": 0.63},
+    {"U": 55, "M_k": 0.47, "s_k": 0.61},
+]
 
 FAN_MOTOR = {
     "f1": 50,
@@ -177,72 +183,6 @@ def plot_overview(rows, starts, path):
     ax.set_ylim(0, 4.9)
     ax.yaxis.set_major_formatter(pl_axis(1))
     ax.legend(loc="upper center", fontsize=8.5, ncol=3, framealpha=0.95)
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
-
-
-def plot_start(rows, s, path, pre=3, post=3):
-    idx0 = next(k for k, r in enumerate(rows) if r[0] == s.t[0])
-    seg = rows[max(0, idx0 - pre) : idx0 + len(s.t) + post]
-    t = [(r[0] - s.t[0]).total_seconds() for r in seg]
-    fig, ax = plt.subplots(figsize=(6.3, 3.2))
-    t_st0 = (s.t[s.steady.start] - s.t[0]).total_seconds()
-    t_st1 = (s.t[s.steady.stop - 1] - s.t[0]).total_seconds()
-    ax.axvspan(t_st0, t_st1, color="#7fbf7f", alpha=0.22, label="zakres stanu ustalonego")
-    pk = sorted({(s.t[k] - s.t[0]).total_seconds() for k in s.peak_idx})
-    ax.axvspan(pk[0] - 0.35, pk[-1] + 0.35, color="#e06060", alpha=0.20, label="zakres maksimum rozruchowego")
-    for f in range(3):
-        ax.plot(
-            t,
-            [r[1][f] for r in seg],
-            color=PHASE_COLORS[f],
-            lw=1.4,
-            marker="o",
-            ms=3,
-            label=f"I$_{{\\mathrm{{rms{f + 1}}}}}$ (faza L{f + 1})",
-        )
-        k = s.peak_idx[f]
-        ax.plot(
-            (s.t[k] - s.t[0]).total_seconds(),
-            s.i[k][f],
-            marker="D",
-            ms=6,
-            mfc="none",
-            mec=PHASE_COLORS[f],
-            mew=1.4,
-        )
-    ax.hlines(s.i_ust_sr, t_st0, t_st1, colors="k", linestyles="--", lw=1.0, label=f"I$_{{\\mathrm{{ust}}}}$ = {pl(s.i_ust_sr)} A")
-    ax.set_xlabel("t [s] (t = 0 – załączenie silnika)")
-    ax.set_ylabel("I [A]")
-    ax.set_xlim(t[0], t[-1])
-    ax.xaxis.set_major_locator(MultipleLocator(2))
-    ax.set_ylim(0, 4.4)
-    ax.yaxis.set_major_formatter(pl_axis(1))
-    ax.legend(loc="upper right", fontsize=8, ncol=2, framealpha=0.95)
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
-
-
-def plot_mechanical(sets, path):
-    fig, ax = plt.subplots(figsize=(6.3, 3.6))
-    for k, z in enumerate(sets):
-        ax.plot(z["s"], z["M"], marker="o", ms=4, lw=1.4, color=PHASE_COLORS[k], label=f"f$_1$ = {z['f1']} Hz")
-        kk = z["krytyczny"]
-        ax.plot(z["s"][kk], z["M"][kk], marker="D", ms=7, mfc="none", mec="k")
-        ax.annotate(
-            f"M$_k$ = {pl(z['M'][kk], 2)} N·m\ns$_k$ = {pl(z['s'][kk])}",
-            xy=(z["s"][kk], z["M"][kk]),
-            xytext=(8, -26 - 22 * k),
-            textcoords="offset points",
-            fontsize=8.5,
-        )
-    ax.set_xlabel("s [-]")
-    ax.set_ylabel("M [N·m]")
-    ax.xaxis.set_major_formatter(pl_axis(2))
-    ax.yaxis.set_major_formatter(pl_axis(2))
-    ax.legend(fontsize=8.5)
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -542,7 +482,6 @@ def build():
     rows = read_csv()
     starts = find_starts(rows)
     assert len(starts) == 3, starts
-    mech = prepare_mechanical()
     out_img = HERE / "wykresy"
     out_img.mkdir(exist_ok=True)
 
@@ -558,19 +497,22 @@ def build():
     f_obr_fan = fm["f1"] * (1 - s_fan) / fm["p"]
     asym = [100 * (1 - s.i_ust[2] / s.i_ust[f]) for s in starts for f in (0, 1)]
     asym_lo, asym_hi = min(asym), max(asym)
+    tm = TESTED_MOTOR
+    n_s_tm = 60 * tm["f1"] / tm["p"]
+    s_N_tm = (n_s_tm - tm["n_N"]) / n_s_tm
+    kryt = [dict(z, n_k=n_s_tm * (1 - z["s_k"])) for z in PARAMETRY_KRYTYCZNE]
+    k1, k2 = kryt
+    u_ratio_sq = (k2["U"] / k1["U"]) ** 2
+    m_k2_teor = k1["M_k"] * u_ratio_sq
 
     # 1 ---------------------------------------------------------------------
     r.heading("Cel i zakres laboratorium")
     r.para(
         "Celem laboratorium było zapoznanie się z budową, zasadą działania oraz podstawowymi "
         "właściwościami eksploatacyjnymi trójfazowego silnika asynchronicznego klatkowego, "
-        + (
-            "w szczególności z jego charakterystyką mechaniczną oraz z przebiegiem prądu pobieranego "
-            "z sieci podczas rozruchu."
-            if mech
-            else "w szczególności z przebiegiem prądu pobieranego z sieci podczas rozruchu "
-            "i wyznaczenie współczynnika krotności prądu rozruchowego."
-        )
+        "w szczególności z jego charakterystyką mechaniczną i wpływem napięcia zasilania na parametry "
+        "krytyczne, a także z przebiegiem prądu pobieranego z sieci podczas rozruchu i wyznaczenie "
+        "współczynnika krotności prądu rozruchowego."
     )
     r.para(
         "Silnik asynchroniczny klatkowy składa się z nieruchomego stojana, w którego żłobkach "
@@ -602,13 +544,10 @@ def build():
         "układy łagodnego rozruchu oraz przemienniki częstotliwości."
     )
     r.para("Zakres laboratorium obejmował:")
-    scope = ["zapoznanie się z budową stanowisk badawczych i danymi znamionowymi badanych silników"]
-    if mech:
-        scope += [
-            "pomiar momentu obciążenia i prędkości obrotowej silnika dla dwóch zestawów parametrów "
-            "zasilania oraz wyznaczenie charakterystyk mechanicznych M = f(s) i parametrów krytycznych",
-        ]
-    scope += [
+    scope = [
+        "zapoznanie się z budową stanowisk badawczych i danymi znamionowymi badanych silników",
+        "wyznaczenie charakterystyk mechanicznych M = f(s) silnika przy dwóch wartościach napięcia "
+        f"zasilania ({k1['U']} % i {k2['U']} % U_{{N}}) oraz określenie momentu, poślizgu i prędkości krytycznej",
         "rejestrację wartości skutecznych prądów w trzech fazach zasilania podczas trzech kolejnych "
         "rozruchów silnika napędzającego wentylator",
         "wyznaczenie wartości prądu w stanie ustalonym, maksymalnej wartości prądu podczas rozruchu "
@@ -625,24 +564,46 @@ def build():
     def fig_ref():
         return f"2.{fig_no + 1}"
 
-    if mech:
-        r.para(
-            f"Charakterystykę mechaniczną wyznaczono na stanowisku przedstawionym na rysunku {fig_ref()}. "
-            "Badany silnik asynchroniczny zasilany jest z przemiennika częstotliwości, a jego wał "
-            "sprzęgnięty jest z alternatorem obciążonym rezystorem. Moment obciążający silnik "
-            "regulowany jest zmianą prądu wzbudzenia alternatora, a prędkość obrotowa i moment "
-            "odczytywane są za pomocą układu pomiarowego współpracującego z komputerem PC."
-        )
-        fig_no += 1
-        r.figure(IMG_DIR / "stanowisko_charakterystyka.jpg", 12.5, f"2.{fig_no}. Widok stanowiska do badania charakterystyki mechanicznej silnika")
-        r.para(
-            f"Na rysunku {fig_ref()} przedstawiono tabliczkę znamionową badanego silnika pro-MOTOR MS 71 1-4. "
-            "Jest to silnik o mocy 0,25 kW, dwóch parach biegunów (p = 2), prędkości znamionowej "
-            "1350 obr/min przy 50 Hz (prędkość synchroniczna 1500 obr/min) i prądach znamionowych "
-            "1,45/0,84 A dla połączenia w trójkąt/gwiazdę (230/400 V)."
-        )
-        fig_no += 1
-        r.figure(IMG_DIR / "tabliczka_silnik_badany.jpg", 12.0, f"2.{fig_no}. Tabliczka znamionowa silnika użytego do badania charakterystyki mechanicznej")
+    tab_no = 0
+    r.para(
+        f"Charakterystykę mechaniczną wyznaczono na stanowisku przedstawionym na rysunku {fig_ref()}. "
+        "Badany silnik asynchroniczny zasilany jest z przemiennika częstotliwości, który umożliwia "
+        "nastawienie wartości napięcia i częstotliwości zasilania. Wał silnika sprzęgnięty jest "
+        "z alternatorem obciążonym rezystorem, a moment obciążający silnik regulowany jest zmianą prądu "
+        "wzbudzenia alternatora, dostarczanego z zasilacza laboratoryjnego. Moment obciążenia oraz "
+        "prędkość obrotowa wału są mierzone i wyświetlane na komputerze PC."
+    )
+    fig_no += 1
+    r.figure(IMG_DIR / "stanowisko_charakterystyka.jpg", 14.0, f"2.{fig_no}. Widok stanowiska do badania charakterystyki mechanicznej silnika")
+    tab_no += 1
+    tm_tab = f"2.{tab_no}"
+    r.para(
+        f"Na rysunku {fig_ref()} przedstawiono tabliczkę znamionową badanego silnika, a odczytane z niej "
+        f"dane znamionowe zestawiono w tabeli {tm_tab}."
+    )
+    fig_no += 1
+    r.figure(IMG_DIR / "tabliczka_silnik_badany.jpg", 12.0, f"2.{fig_no}. Tabliczka znamionowa silnika użytego do badania charakterystyki mechanicznej")
+    r.table(
+        f"{tm_tab}. Dane znamionowe silnika użytego do badania charakterystyki mechanicznej",
+        ["Parametr", "Wartość"],
+        [
+            ["Producent / typ", "pro-MOTOR / MS 71 1-4"],
+            ["Częstotliwość znamionowa f_{1}", "50 Hz / 60 Hz"],
+            ["Moc znamionowa P_{N}", "0,25 kW / 0,3 kW"],
+            ["Napięcie znamionowe (Δ/Y)", "230/400 V / 265/460 V"],
+            ["Prąd znamionowy I_{N} (Δ/Y)", "1,45/0,84 A"],
+            ["Prędkość znamionowa n_{N}", "1350 / 1620 obr/min"],
+            ["Współczynnik mocy cos φ", "0,72"],
+            ["Klasa izolacji / stopień ochrony", "F / IP55"],
+            ["Rodzaj pracy / temp. otoczenia", "S1 / 50 °C"],
+        ],
+        [6.5, 6.0],
+    )
+    r.para(
+        f"Silnik ma dwie pary biegunów (p = {tm['p']}), a jego prędkość synchroniczna przy częstotliwości "
+        f"{tm['f1']} Hz wynosi {n_s_tm:.0f} obr/min."
+    )
+    r.empty()
 
     r.para(
         f"Pomiar prądu rozruchowego przeprowadzono na stanowisku przedstawionym na rysunku {fig_ref()}. "
@@ -656,14 +617,16 @@ def build():
     fig_no += 1
     r.figure(IMG_DIR / "stanowisko_prad_rozruchowy.jpg", 13.0, f"2.{fig_no}. Widok stanowiska do badania prądów rozruchowych i parametrów zasilania")
     fan_fig = fig_ref()
+    tab_no += 1
+    fan_tab = f"2.{tab_no}"
     r.para(
         f"Tabliczkę znamionową silnika napędzającego wentylator przedstawiono na rysunku {fan_fig}, "
-        "a odczytane z niej dane znamionowe zestawiono w tabeli 2.1."
+        f"a odczytane z niej dane znamionowe zestawiono w tabeli {fan_tab}."
     )
     fig_no += 1
     r.figure(IMG_DIR / "tabliczka_wentylator.jpg", 10.0, f"2.{fig_no}. Tabliczka znamionowa silnika napędzającego wentylator")
     r.table(
-        "2.1. Dane znamionowe silnika napędzającego wentylator",
+        f"{fan_tab}. Dane znamionowe silnika napędzającego wentylator",
         ["Parametr", "Wartość"],
         [
             ["Producent / typ", "BESEL S.A. / SKg 63-2B1"],
@@ -687,28 +650,23 @@ def build():
     # 3 ---------------------------------------------------------------------
     r.heading("Badania stanowiskowe")
     tab_no = 0
-    if mech:
-        r.para(
-            "Badanie charakterystyki mechanicznej polegało na zanotowaniu wartości momentu obciążającego "
-            "silnik oraz prędkości obrotowej dla 10 ustawień obciążenia – od momentu szczątkowego do "
-            "maksymalnego możliwego do uzyskania. Pomiary wykonano dla dwóch zestawów parametrów zasilania, "
-            "a ich wyniki zestawiono w tabeli 3.1."
-        )
-        tab_no += 1
-        n_pts = max(len(z["pomiary"]) for z in mech)
-        rows_m = []
-        for k in range(n_pts):
-            row = [str(k + 1)]
-            for z in mech:
-                if k < len(z["pomiary"]):
-                    row += [pl(z["M"][k], 2), f"{z['n'][k]:.0f}"]
-                else:
-                    row += ["", ""]
-            rows_m.append(row)
-        head = ["L.p."]
-        for z in mech:
-            head += [f"M [N·m] ({z['f1']} Hz)", f"n [obr/min] ({z['f1']} Hz)"]
-        r.table(f"3.{tab_no}. Wyniki pomiarów momentu obciążenia i prędkości obrotowej silnika", head, rows_m, [1.3] + [3.4] * (2 * len(mech)))
+    r.para(
+        "Badanie charakterystyki mechanicznej polegało na określeniu wartości momentu obciążającego "
+        "silnik w funkcji poślizgu. Dla każdego ustawienia obciążenia – od momentu szczątkowego do "
+        "maksymalnego możliwego do uzyskania – notowano wartość momentu oraz prędkości obrotowej. "
+        "Pomiary wykonano dla dwóch zestawów parametrów zasilania ustalonych przez prowadzącego: "
+        f"przy napięciu zasilania równym {k1['U']} % oraz {k2['U']} % napięcia znamionowego U_{{N}}. "
+        "Przy większych obciążeniach po każdym odczycie zmniejszano obciążenie w celu ograniczenia "
+        "nagrzewania się rezystora. Z otrzymanych charakterystyk mechanicznych odczytano moment "
+        f"krytyczny M_{{k}} i poślizg krytyczny s_{{k}}, które zestawiono w tabeli 3.{tab_no + 1}."
+    )
+    tab_no += 1
+    r.table(
+        f"3.{tab_no}. Parametry krytyczne odczytane z charakterystyk mechanicznych silnika",
+        ["L.p.", "U_{zas} [% U_{N}]", "M_{k} [N·m]", "s_{k} [-]"],
+        [[str(k + 1), f"{z['U']} %", pl(z["M_k"], 2), pl(z["s_k"], 2)] for k, z in enumerate(kryt)],
+        [1.3, 3.4, 3.0, 3.0],
+    )
 
     t0 = rows[0][0]
     r.para(
@@ -742,18 +700,12 @@ def build():
         )
 
     r.para(
-        "Na rysunkach 3.2–3.4 przedstawiono przebiegi prądów fazowych w funkcji czasu dla każdego "
-        "z pomiarów (trzy fazy na jednym wykresie). Kolorem czerwonym zaznaczono zakres, z którego "
-        "odczytano maksymalne wartości prądu podczas rozruchu (wartości maksymalne każdej z faz "
-        "wyróżniono rombami), a kolorem zielonym – zakres stanu ustalonego, z którego obliczono "
-        "średnią wartość prądu pracy ustalonej. Do stanu ustalonego zaliczono próbki, w których "
-        "prąd każdej fazy różnił się o nie więcej niż 10 % od mediany danego rozruchu; pominięto "
-        "próbki z okresu narastania prędkości oraz z chwili wyłączania silnika."
+        "Maksymalną wartość prądu każdej fazy podczas rozruchu odczytano z dwóch pierwszych próbek "
+        "po załączeniu silnika. Do zakresu stanu ustalonego zaliczono próbki, w których prąd każdej "
+        "fazy różnił się o nie więcej niż 10 % od mediany danego rozruchu – pominięto próbki z okresu "
+        "narastania prędkości oraz z chwili wyłączania silnika. Przyjęte zakresy stanu ustalonego "
+        "podano w tabeli 4.2."
     )
-    for s in starts:
-        path = out_img / f"rys_3_{s.nr + 1}_pomiar_{s.nr}.png"
-        plot_start(rows, s, path)
-        r.figure(path, 15.5, f"3.{s.nr + 1}. Przebieg wartości skutecznych prądów fazowych podczas rozruchu – pomiar {s.nr}")
 
     s1, s2, s3 = starts
     r.para(
@@ -771,48 +723,73 @@ def build():
     # 4 ---------------------------------------------------------------------
     r.heading("Wyniki obliczeń")
     tab_no = 0
-    if mech:
-        r.para("Prędkość synchroniczną silnika obliczono ze wzoru:")
-        r.empty()
-        r.equation(sym("n", "s") + mr("=") + mfrac(mr("60∙") + sym("f", "1"), mr("p")))
-        r.where([
-            ("f_{1}", "częstotliwość napięcia zasilającego [Hz]"),
-            ("p", "liczba par biegunów [-]"),
-        ])
-        r.para("Poślizg silnika dla każdego punktu pomiarowego obliczono ze wzoru:")
-        r.empty()
-        r.equation(mr("s=") + mfrac(sym("n", "s") + mr("-n"), sym("n", "s")))
-        r.where([
-            ("n_{s}", "prędkość synchroniczna [obr/min]"),
-            ("n", "zmierzona prędkość obrotowa wirnika [obr/min]"),
-        ])
-        for z in mech:
-            tab_no += 1
-            r.table(
-                f"4.{tab_no}. Wyniki obliczeń poślizgu dla f_{{1}} = {z['f1']} Hz (n_{{s}} = {z['n_s']:.0f} obr/min)",
-                ["L.p.", "M [N·m]", "n [obr/min]", "s [-]"],
-                [[str(k + 1), pl(m_, 2), f"{n_:.0f}", pl(s_, 4)] for k, (m_, n_, s_) in enumerate(zip(z["M"], z["n"], z["s"]))],
-                [1.3, 3.0, 3.0, 3.0],
-            )
-        path = out_img / "rys_4_1_charakterystyka_mechaniczna.png"
-        plot_mechanical(mech, path)
-        r.para(
-            "Na rysunku 4.1 przedstawiono charakterystyki mechaniczne silnika M = f(s) dla obu zestawów "
-            "parametrów zasilania w jednym układzie współrzędnych. Jako punkt krytyczny przyjęto punkt "
-            "pomiarowy o największym zmierzonym momencie."
-        )
-        r.figure(path, 15.5, "4.1. Charakterystyki mechaniczne silnika M = f(s)")
-        tab_no += 1
-        r.table(
-            f"4.{tab_no}. Parametry krytyczne silnika",
-            ["f_{1} [Hz]", "M_{k} [N·m]", "s_{k} [-]", "n_{k} [obr/min]"],
-            [[str(z["f1"]), pl(z["M"][z["krytyczny"]], 2), pl(z["s"][z["krytyczny"]], 4), f"{z['n'][z['krytyczny']]:.0f}"] for z in mech],
-            [2.8, 2.8, 2.8, 2.8],
-        )
+    r.para(
+        "Prędkość synchroniczną badanego silnika (pro-MOTOR MS 71 1-4) obliczono ze wzoru:"
+    )
+    r.empty()
+    r.equation(
+        sym("n", "s") + mr("=") + mfrac(mr("60∙") + sym("f", "1"), mr("p")) + mr("=")
+        + mfrac(mr(f"60∙{tm['f1']}"), mr(str(tm["p"]))) + mr(f"={n_s_tm:.0f}") + num(" obr/min")
+    )
+    r.where([
+        ("f_{1}", "częstotliwość napięcia zasilającego [Hz]"),
+        ("p", "liczba par biegunów [-]"),
+    ])
+    r.para(
+        "Prędkość obrotową odpowiadającą poślizgowi krytycznemu obliczono, przekształcając wzór "
+        "na poślizg s = (n_{s} – n)/n_{s}:"
+    )
+    r.empty()
+    eq_nk = r.equation(sym("n", "k") + mr("=") + sym("n", "s") + mr("∙(1-") + sym("s", "k") + mr(")"))
+    r.where([
+        ("n_{k}", "prędkość obrotowa krytyczna [obr/min]"),
+        ("n_{s}", "prędkość synchroniczna [obr/min]"),
+        ("s_{k}", "poślizg krytyczny [-]"),
+    ])
+    r.para(
+        f"Wyniki obliczeń według wzoru ({eq_nk}) dla obu wartości napięcia zasilania zestawiono "
+        f"w tabeli 4.{tab_no + 1}."
+    )
+    tab_no += 1
+    r.table(
+        f"4.{tab_no}. Parametry krytyczne silnika",
+        ["U_{zas} [% U_{N}]", "M_{k} [N·m]", "s_{k} [-]", "n_{k} [obr/min]"],
+        [[f"{z['U']} %", pl(z["M_k"], 2), pl(z["s_k"], 2), f"{z['n_k']:.0f}"] for z in kryt],
+        [3.4, 3.0, 3.0, 3.0],
+    )
+    r.para(
+        "Zgodnie z teorią moment krytyczny silnika asynchronicznego jest proporcjonalny do kwadratu "
+        "napięcia zasilania, natomiast poślizg krytyczny od napięcia nie zależy. Teoretyczną wartość "
+        f"momentu krytycznego przy napięciu {k2['U']} % U_{{N}}, wyznaczoną na podstawie pomiaru przy "
+        f"{k1['U']} % U_{{N}}, obliczono ze wzoru:"
+    )
+    r.empty()
+    eq_mk = r.equation(
+        msub(mr("M"), mr("k2,teor", False)) + mr("=") + msub(mr("M"), mr("k1", False)) + mr("∙")
+        + "<m:sSup><m:e><m:d><m:e>" + mfrac(msub(mr("U"), mr("2", False)), msub(mr("U"), mr("1", False)))
+        + "</m:e></m:d></m:e><m:sup>" + mr("2") + "</m:sup></m:sSup>"
+        + mr("=") + num(pl(k1["M_k"], 2)) + mr("∙")
+        + "<m:sSup><m:e><m:d><m:e>" + mfrac(num(f"{k2['U']} %"), num(f"{k1['U']} %"))
+        + "</m:e></m:d></m:e><m:sup>" + mr("2") + "</m:sup></m:sSup>"
+        + mr("≈") + num(pl(m_k2_teor, 2)) + num(" N∙m")
+    )
+    r.where([
+        ("M_{k1}", f"moment krytyczny zmierzony przy napięciu U_{{1}} = {k1['U']} % U_{{N}} [N·m]"),
+        ("U_{1}, U_{2}", "napięcia zasilania w obu pomiarach [V]"),
+    ])
+    r.para(
+        f"Zmierzony moment krytyczny przy {k2['U']} % U_{{N}} wynosi {pl(k2['M_k'], 2)} N·m i jest o ok. "
+        f"{(k2['M_k'] / m_k2_teor - 1) * 100:.0f} % większy od wartości teoretycznej {pl(m_k2_teor, 2)} N·m. "
+        f"Stosunek zmierzonych momentów krytycznych wynosi M_{{k2}}/M_{{k1}} = {pl(k2['M_k'] / k1['M_k'], 3)}, "
+        f"a stosunek kwadratów napięć (U_{{2}}/U_{{1}})^{{2}} = {pl(u_ratio_sq, 3)}. Poślizgi krytyczne "
+        f"w obu pomiarach różnią się tylko o {pl(abs(k1['s_k'] - k2['s_k']), 2)}. Dla porównania poślizg "
+        f"znamionowy silnika (n_{{N}} = {tm['n_N']} obr/min) wynosi s_{{N}} = ({n_s_tm:.0f} – {tm['n_N']})/"
+        f"{n_s_tm:.0f} = {pl(s_N_tm, 2)}, a więc jest kilkukrotnie mniejszy od poślizgu krytycznego."
+    )
 
     r.para(
         "Wartość prądu w stanie ustalonym dla każdej fazy obliczono jako średnią arytmetyczną "
-        "próbek z zakresu stanu ustalonego (zaznaczonego na rysunkach 3.2–3.4):"
+        f"próbek z zakresu stanu ustalonego (zakresy podano w tabeli 4.{tab_no + 1}):"
     )
     r.empty()
     eq1 = r.equation(
@@ -899,7 +876,7 @@ def build():
         f"I_{{max}}/I_{{N}} = {pl(i_max_all, 3)}/{pl(i_n, 2)} ≈ {pl(i_max_all / i_n, 2)}."
     )
     r.para(
-        "Na podstawie danych z tabliczki znamionowej (tab. 2.1) obliczono również prędkość synchroniczną, "
+        f"Na podstawie danych z tabliczki znamionowej (tab. {fan_tab}) obliczono również prędkość synchroniczną, "
         "poślizg znamionowy oraz częstotliwość obrotów wirnika silnika napędzającego wentylator:"
     )
     r.empty()
@@ -935,38 +912,32 @@ def build():
     r.heading("Wnioski")
     r.conclusion(
         "Celem laboratorium było poznanie budowy, zasady działania i właściwości trójfazowego silnika "
-        "asynchronicznego klatkowego, "
-        + ("w tym wyznaczenie jego charakterystyki mechanicznej oraz " if mech else "w tym ")
-        + "określenie wartości prądu pobieranego podczas rozruchu i współczynnika krotności prądu rozruchowego."
+        "asynchronicznego klatkowego, w tym wyznaczenie jego charakterystyki mechanicznej i parametrów "
+        "krytycznych oraz określenie wartości prądu pobieranego podczas rozruchu i współczynnika krotności "
+        "prądu rozruchowego."
     )
     r.conclusion(
-        "W celu realizacji zadania "
-        + (
-            "wykonano pomiary momentu i prędkości obrotowej silnika dla dwóch zestawów parametrów zasilania, "
-            "obliczono poślizg i wykreślono charakterystyki M = f(s), a następnie "
-            if mech
-            else ""
-        )
-        + "zarejestrowano wartości skuteczne prądów w trzech fazach zasilania podczas trzech rozruchów "
-        "silnika napędzającego wentylator. Dla każdego pomiaru wyznaczono średni prąd w stanie ustalonym, "
-        "średnią maksymalną wartość prądu podczas rozruchu oraz ich stosunek, a następnie średnią "
-        "krotność wzrostu prądu."
+        "W celu realizacji zadania wyznaczono charakterystyki mechaniczne M = f(s) silnika pro-MOTOR "
+        f"MS 71 1-4 przy napięciu zasilania {k1['U']} % i {k2['U']} % U_{{N}} i odczytano z nich parametry "
+        "krytyczne, a następnie zarejestrowano wartości skuteczne prądów w trzech fazach zasilania podczas "
+        "trzech rozruchów silnika napędzającego wentylator. Dla każdego rozruchu wyznaczono średni prąd "
+        "w stanie ustalonym, średnią maksymalną wartość prądu podczas rozruchu oraz ich stosunek, "
+        "a następnie średnią krotność wzrostu prądu."
     )
-    if mech:
-        parts = []
-        for z in mech:
-            kk = z["krytyczny"]
-            parts.append(
-                f"dla f_{{1}} = {z['f1']} Hz: M_{{k}} = {pl(z['M'][kk], 2)} N·m, s_{{k}} = {pl(z['s'][kk], 3)}, "
-                f"n_{{k}} = {z['n'][kk]:.0f} obr/min"
-            )
-        r.conclusion(
-            "Wyznaczone charakterystyki mechaniczne mają przebieg zgodny z teorią: w zakresie małych poślizgów "
-            "moment rośnie niemal liniowo wraz z poślizgiem (zakres pracy stabilnej), a po osiągnięciu momentu "
-            "krytycznego zaczyna maleć (zakres niestabilny). Wyznaczone parametry krytyczne wynoszą: "
-            + "; ".join(parts) + ". Zmiana częstotliwości zasilania przesuwa charakterystykę, ponieważ "
-            "zmienia się prędkość synchroniczna pola wirującego."
-        )
+    r.conclusion(
+        f"Wyznaczone parametry krytyczne wynoszą: przy {k1['U']} % U_{{N}} – M_{{k}} = {pl(k1['M_k'], 2)} N·m, "
+        f"s_{{k}} = {pl(k1['s_k'], 2)} (n_{{k}} ≈ {k1['n_k']:.0f} obr/min), a przy {k2['U']} % U_{{N}} – "
+        f"M_{{k}} = {pl(k2['M_k'], 2)} N·m, s_{{k}} = {pl(k2['s_k'], 2)} (n_{{k}} ≈ {k2['n_k']:.0f} obr/min). "
+        f"Obniżenie napięcia zasilania z {k1['U']} % do {k2['U']} % U_{{N}} spowodowało spadek momentu "
+        f"krytycznego o ok. {(1 - k2['M_k'] / k1['M_k']) * 100:.0f} %, przy praktycznie niezmienionym poślizgu "
+        "krytycznym. Jest to zgodne z teorią: moment krytyczny jest proporcjonalny do kwadratu napięcia "
+        f"(wartość teoretyczna {pl(m_k2_teor, 2)} N·m różni się od zmierzonej o ok. "
+        f"{(k2['M_k'] / m_k2_teor - 1) * 100:.0f} %, co mieści się w granicach dokładności odczytu z charakterystyki), "
+        "a poślizg krytyczny od napięcia nie zależy. Stabilna praca silnika jest możliwa dla poślizgów "
+        f"mniejszych od krytycznego, tj. przy prędkości większej niż ok. {max(k1['n_k'], k2['n_k']):.0f} obr/min. "
+        "Obniżanie napięcia zmniejsza przeciążalność silnika, a prędkość obrotową zmienia jedynie "
+        "w niewielkim zakresie, dlatego jest mało efektywną metodą regulacji prędkości."
+    )
     r.conclusion(
         f"Podczas rozruchu prąd pobierany przez silnik wzrastał od zera do wartości maksymalnej "
         f"{pl(min(s.i_max_sr for s in starts), 2)}–{pl(max(s.i_max_sr for s in starts), 2)} A (średnio z trzech faz), "
@@ -992,36 +963,13 @@ def build():
         "(np. oscyloskopem lub rejestratorem z okresem rzędu milisekund), co pozwoliłoby wyznaczyć "
         "rzeczywistą wartość szczytową prądu rozruchowego. Warto także porównać rozruch bezpośredni "
         "z rozruchem gwiazda–trójkąt oraz z rozruchem przez przemiennik częstotliwości z różnymi czasami "
-        "rampy, aby ocenić skuteczność poszczególnych metod ograniczania prądu rozruchowego."
+        "rampy, aby ocenić skuteczność poszczególnych metod ograniczania prądu rozruchowego. W przypadku "
+        "charakterystyki mechanicznej warto powtórzyć pomiary przy napięciu znamionowym i przy różnych "
+        "częstotliwościach zasilania, aby porównać wpływ obu metod sterowania na kształt charakterystyki."
     )
 
     r.save(OUT_DOCX)
     return starts, k_sr
-
-
-def prepare_mechanical():
-    sets = []
-    for z in CHARAKTERYSTYKA_MECHANICZNA:
-        if not z.get("pomiary"):
-            continue
-        n_s = 60 * z["f1"] / P_BADANY
-        M_ = [m_ for m_, _ in z["pomiary"]]
-        n_ = [n for _, n in z["pomiary"]]
-        s_ = [(n_s - n) / n_s for n in n_]
-        order = sorted(range(len(s_)), key=lambda k: s_[k])
-        M_, n_, s_ = [M_[k] for k in order], [n_[k] for k in order], [s_[k] for k in order]
-        sets.append(
-            {
-                "f1": z["f1"],
-                "pomiary": z["pomiary"],
-                "n_s": n_s,
-                "M": M_,
-                "n": n_,
-                "s": s_,
-                "krytyczny": max(range(len(M_)), key=lambda k: M_[k]),
-            }
-        )
-    return sets
 
 
 if __name__ == "__main__":
